@@ -136,6 +136,9 @@ secrets/                       MQTT 客户端证书（不入库）
 docs/
 ```
 
+> 上游组件自带的文档配图（`components/brookesia_core/docs/`、`systems/*/docs/`）未包含在本仓 ——
+> 它们只服务于上游自己的文档，不参与编译。需要的话从上游仓库获取。
+
 ---
 
 ## 已知限制
