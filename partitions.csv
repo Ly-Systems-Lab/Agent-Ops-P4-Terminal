@@ -1,0 +1,15 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+nvsfactory, data,   nvs,        ,     200K,
+nvs,        data,   nvs,        ,     840K,
+otadata,    data,   ota,        ,     0x2000,
+phy_init,   data,   phy,        ,     0x1000,
+# ESP-SR memory-maps this image; keep it below 16 MiB on Quad Flash.
+model,    data, spiffs,         ,     0xF0000,
+factory,  app,  factory,        0x00200000,     8M,
+storage,  data, spiffs,         ,     6M,
+# 我们自己的数据分区（网页控制台的上传落点）。纯追加在末尾 ——
+# 上面任何分区的 offset 都没动，所以只需重写 0x8000 处那张 4 KB 的分区表，不用整片刷。
+# 尺寸依据：storage(6M) 结束在 0x1000000 = 16 MiB，而 flash 共 32 MiB ⇒ 后半段 16 MiB 本来就空着。
+# 选 FAT(而非 spiffs) 是为了将来插 SD 卡时读写代码走同一条路。
+userdata, data, fat,            ,     16M,

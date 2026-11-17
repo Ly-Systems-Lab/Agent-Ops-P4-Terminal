@@ -1,0 +1,6 @@
+version: 0.1.0
+
+dependencies:
+  idf: ">=5.5,<6.0"
+  # USB 大容量存储。2.4.0 是本机缓存里已有的版本，P4 在它的 targets 列表里。
+  espressif/esp_tinyusb: "2.4.0"

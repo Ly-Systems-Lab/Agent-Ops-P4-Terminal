@@ -1,0 +1,37 @@
+dependencies:
+  idf:
+    version: ">=5.5"
+
+  espressif/esp_codec_dev:
+    version: "1.5.11"
+    public: true
+
+  # Pin BSP transitive dependencies because the generated lock file is local.
+  espressif/esp_lcd_touch_gt911:
+    version: "1.2.1"
+
+  espressif/esp_lvgl_adapter:
+    version: "0.6.3"
+
+  espressif/esp_lcd_jd9365:
+    version: "2.0.2"
+
+  waveshare/esp_lcd_ili9881c:
+    version: "2.0.0"
+
+  chmorgan/esp-audio-player:
+    version: "1.1.0"
+    public: true
+    # 我们接管了这个依赖的一份**本地副本**，只为打一个补丁（见 audio_mp3.cpp 里的「本地补丁 #1」）：
+    # decode_mp3 在帧头非法时不推进读指针 ⇒ 撞上 ID3 标签里的假同步会永久死循环、无声。
+    # 必须走 override_path：managed_components/ 被 .gitignore 挡着，直接改那儿会丢。
+    override_path: "../../local_components/esp-audio-player"
+
+  chmorgan/esp-file-iterator:
+    version: "1.0.0"
+    public: true
+
+description: Project-specific extensions for ESP32-P4-WIFI6-Touch-LCD-X
+targets:
+- esp32p4
+version: 0.0.2

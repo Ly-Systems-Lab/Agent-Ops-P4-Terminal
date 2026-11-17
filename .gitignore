@@ -10,12 +10,11 @@
 # MQTT 双向认证三件套（CA / 客户端证书 / 客户端私钥）按 docs 的说明自行生成后放这里，
 # 构建时被编译进固件。仓库里只保留目录本身，不放任何真实凭据。
 secrets/*
-!secrets/.gitkeep
 !secrets/README.md
 
 # ===== 设备整片镜像 =====
 # 含 NVS 分区（WiFi 凭据、broker 账号等运行时配置），绝不入库。
-backup/
+/backup/
 *.bin
 
 # ===== 构建产物 =====
@@ -24,6 +23,10 @@ build-*/
 managed_components/
 sdkconfig
 sdkconfig.old
+
+# 组件管理器在首次构建时生成的锁文件。它记录的是**本机绝对路径**（本地覆写组件的 source.path），
+# 换一台机器即失效，因此不入库；组件版本由各 idf_component.yml 约束。
+dependencies.lock
 *.elf
 *.map
 

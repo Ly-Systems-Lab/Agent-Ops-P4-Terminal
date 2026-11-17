@@ -1,0 +1,194 @@
+# This file was generated using idf.py save-defconfig. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 5.5 Project Minimal Configuration
+#
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="32MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=4096
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000
+CONFIG_FREERTOS_HZ=1000
+CONFIG_VFS_MAX_COUNT=20
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OBJ_STYLE_CACHE=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
+CONFIG_CAMERA_OV5647=y
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800X1280_50FPS=y
+CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW8_800X1280_50FPS=y
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_BSP_I2C_CLK_SPEED_HZ=400000
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
+CONFIG_BSP_LCD_COLOR_FORMAT_RGB565=y
+CONFIG_ESP_BROOKESIA_ENABLE_AI_FRAMEWORK=n
+CONFIG_ESP_BROOKESIA_GUI_ENABLE_ANIM_PLAYER=n
+CONFIG_ESP_BROOKESIA_ENABLE_SERVICES=n
+CONFIG_ESP_BROOKESIA_SYSTEMS_ENABLE_SPEAKER=n
+CONFIG_BOOST_MATH_ENABLED=n
+CONFIG_BOOST_SERIALIZATION_ENABLED=n
+
+# Xiaozhi wake word: "Ni Hao Xiao Zhi" (WakeNet 9).
+CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
+
+# Xiaozhi-owned status and activation fallback text. Server text is unchanged.
+CONFIG_XIAOZHI_APP_UI_LANGUAGE_ENGLISH=y
+
+# Keep synchronous service requests within the app lifecycle wait window.
+CONFIG_XIAOZHI_INFO_TIMEOUT_MS=8000
+
+# 关掉 esp_xiaozhi 的"用服务器时间覆盖系统时钟"（默认是 y）。
+# 打开时：OTA/info 响应里的 server_time 会被写进 settimeofday()，而且它把
+# timezone_offset **加进了 epoch**（esp_xiaozhi_info.c:346-353），显示侧再走一次
+# localtime_r(TZ=CST-8) ⇒ 同一个时区偏移被加了两次。
+# 实测（2026-10-13）：本地 22:38 打开 AIChats ⇒ 状态栏跳到次日 06:38（+8h）。
+# 我们是"在别处管时间"的（Settings 拿到 IP 后走 SNTP 对 ntp.aliyun.com 并设 TZ），
+# 组件 Kconfig 帮助里也明说这种情况就该关掉它。
+# CONFIG_XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER is not set
+
+# ESP32-P4 uses the on-board ESP32-C6 through ESP-Hosted over SDIO.
+# Transport pins and reset defaults come from the matching esp_hosted 1.4.x P4 profile.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
+CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
+CONFIG_WIFI_RMT_TX_BA_WIN=32
+CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
+CONFIG_WIFI_RMT_RX_BA_WIN=32
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCP_SACK_OUT=y
+
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_PRINTF=y
+CONFIG_LV_FONT_MONTSERRAT_8=y
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_26=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_30=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_34=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_38=y
+CONFIG_LV_FONT_MONTSERRAT_40=y
+CONFIG_LV_FONT_MONTSERRAT_42=y
+CONFIG_LV_FONT_MONTSERRAT_44=y
+CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
+CONFIG_LV_FONT_FMT_TXT_LARGE=y
+CONFIG_LV_USE_FONT_COMPRESSED=y
+CONFIG_LV_USE_IMGFONT=y
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_LV_BUILD_EXAMPLES=n
+
+# ---- 网页控制台相关 ----
+# 手机上传的文件名会超 8.3（如 IMG_20261012_143022.jpg），FAT 必须开长文件名，
+# 否则 fopen 直接返回 FR_INVALID_NAME。选 HEAP 版：长名缓冲按需从堆分配
+# （本工程优先从 PSRAM 分配，见 CONFIG_FATFS_ALLOC_PREFER_EXTRAM），
+# 比 LFN_STACK 更省栈 —— httpd 任务栈只有 8 KB。
+CONFIG_FATFS_LFN_HEAP=y
+
+# ---- SD 卡读吞吐 ----
+# `fread` 走 newlib 的 FILE 缓冲，缓冲大小取自 fstat 的 st_blksize（vfs_fat.c:685）。
+# 该项为 0 时退回 newlib 默认（128 B）⇒ **所有 fread 都被切成小碎块**。
+# 2026-10-16 实测，四组对照在**同一次运行**里读同一个 1 MB：
+#   fread 默认缓冲        1.86 MB/s
+#   fread 512 B 小块      1.83 MB/s   <= 和默认**一模一样**，证明默认就是碎的
+#   fread + setvbuf 64KB  9.98 MB/s   (5.4 倍)
+#   POSIX read()         10.76 MB/s   (5.8 倍)
+# 32768 = 本卡簇大小，也是 FatFs 单次请求的上限
+# （IDF 文档 api-guides/performance/speed.rst：最大请求 = 簇大小），再大无益。
+# 代价：每个打开的 FILE 多占 32 KB 堆（CONFIG_FATFS_ALLOC_PREFER_EXTRAM 已指向 PSRAM）。
+CONFIG_FATFS_VFS_FSTAT_BLKSIZE=32768
+
+# ---- SD 卡上传相关 ----
+# 结论：**esp-hosted 的 SDIO 收包模式保持默认的 STREAMING_MODE，别去改。**
+#   2026-10-14 实测（都在本板上跑过）：
+#     · STREAMING_MODE（默认）：WiFi 一切正常；往 SD 卡传 >=2 MB 会崩 ——
+#       崩在 `assert(*buf)`（sdio_drv.c:670），因为流式模式下收包缓冲按**从机积压长度**
+#       分配（`sdio_get_len_from_slave` -> `sdio_rx_get_buffer(len)`），而那要求
+#       `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA` 的**连续**内存；本板内部 RAM
+#       最大连续块只有 30~90 KB，积压一长就分配失败 => 设备重启。
+#     · RX_MAX_SIZE：**数据流直接不通** —— 请求头能收，包体一个字节都收不到
+#       （`httpd_sock_err: error in recv : 11` 每 10 秒一次）。
+#     · RX_NONE：同上，也不通。
+#   ⇒ 两档"优化"模式都需要从机（esp-hosted 从机固件）配套支持，本板这套组合不认。
+#   大文件上传的问题改在**应用层**解决（分片），不动这里。
+# CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_MAX_SIZE is not set
+# CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_NONE is not set
+
+# ---- U 盘模式相关 ----
+# 打开 TinyUSB 的 Mass Storage Class。不开这一项，esp_tinyusb 的 MSC 驱动不会编进来，
+# tinyusb_msc_* 全部链接不过。
+CONFIG_TINYUSB_MSC_ENABLED=y
+
+# USB-Serial-JTAG 的**二级控制台必须关掉**。IDF 自带的 tusb_msc 示例里就带这一行，
+#   注释写得很直白："On chips with USB Serial JTAG, disable secondary console"。
+#   （二级控制台用的是 303A:1001 —— 之前抓串口时在 COM8 上看到的那个 ID 就是它。）
+#   我们的日志一直走 UART0（GPIO37/38 @2 Mbaud）→ CH343 → COM4，关掉它完全不影响抓串口；
+#   但**那个 USB 口以后不再作为调试串口出现**，它现在是 U 盘的通道。
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# MSC 的写/读聚合 FIFO。
+# **结论：保持 8192，别往大调 —— 试过了，代价不对等。**
+#   2026-10-15 实测（本板，同一个 362.40 MB 文件）：
+#     · 8192 （默认）：读 ~8 MB/s，写 3.85 MB/s
+#     · 32768（P4 上限）：读 **~11 MB/s（+38%）**，写 3.8~3.9 MB/s（**不变**）
+#   ⇒ 读确实受益（说明读方向受"每次调用固定开销"限制），
+#     写完全不受益 ⇒ **写侧的瓶颈在 SD 卡本身的编程时间，不在我们的聚合粒度上**。
+#   但代价无法接受：esp_tinyusb 的 storage 对象**内嵌**这么大一块收发缓冲，且用
+#     `heap_caps_aligned_calloc(..., MALLOC_CAP_DMA)` 分配 ⇒ 这个值 = "每次进 U 盘模式
+#     要一块多大的**连续内部 DMA 内存**"。改成 32768 后实测**碎片化时分配失败**：
+#       `E tinyusb_msc_storage: Failed to allocate memory for MSC storage`
+#     ⇒ 进 U 盘模式变成**看运气**（刚开机行、跑几分钟就不行）。
+#   ⇒ 按用户定的口径（纯加分项：宁可稳、不要快）**回退到 8192**。
+#     想要那 +38% 的读速，得先解决"连续 DMA 内存"这个问题（现在没解）。
+# 改这里**必须同时改 build 目录里的 sdkconfig** —— 已存在的键不吃 defaults。
+CONFIG_TINYUSB_MSC_BUFSIZE=8192
+# mbedTLS 缓冲改放 PSRAM —— 内部 DMA 开机只剩 ~71KB，TLS 要 41.5KB + AIChats 音频 22.7KB
+# 会把 esp-aes/TLS 逼到分配失败 -> 卡在 Connecting（2026-10-17 实测）
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# 拼音输入法（聊天面板 Hub 用）。
+# 打开后会出现一组 LV_IME_PINYIN_* 键；字典不用 LVGL 内置那份（322 条、混着繁体、
+# 每音节最多 4 字），而是运行时 lv_ime_pinyin_set_dict() 换成
+# components/brookesia_app_chat/pinyin_dict_zh.h（413 音节 / 7935 简体字）。
+# 改这里**必须同时改 build 目录里的 sdkconfig** —— 已存在的键不吃 defaults。
+CONFIG_LV_USE_IME_PINYIN=y
+# 候选栏每页 10 个（默认 6）。单字 IME 要翻的页多，屏幕上放得下就多放几个。
+CONFIG_LV_IME_PINYIN_CAND_TEXT_NUM=10
+
+# --- MQTT 双向 TLS ---
+# 把 MQTT 的收发缓冲（16 KB）放 PSRAM。
+# 理由：VideoPlayer 的播放任务要一整块 32 KB 连续内部 RAM，
+# 而小智在线时内部 largest 只剩 30 KB -> VideoPlayer 点不开。
+CONFIG_MQTT_BUFFERS_ON_EXTERNAL_MEMORY=y
+# MQTT 任务栈（8 KB）也放 PSRAM：内部 RAM 要留给 VideoPlayer 的 32 KB 连续栈。
+# 代价：PSRAM 堆不能在 cache 被关时访问 ⇒ MQTT 任务不能做 flash 写操作（我们不做）。
+CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY=y

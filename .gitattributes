@@ -1,0 +1,18 @@
+# 统一按 LF 入库与检出：固件工程的构建脚本要在 Linux / macOS / WSL 上直接跑。
+* text=auto eol=lf
+
+# Windows 侧的命令脚本保留 CRLF，否则 cmd.exe 处理换行会出问题。
+*.cmd text eol=crlf
+
+# 二进制素材
+*.bin   binary
+*.a     binary
+*.ogg   binary
+*.mp3   binary
+*.wav   binary
+*.jpg   binary
+*.jpeg  binary
+*.png   binary
+*.gif   binary
+*.webp  binary
+*.aaf   binary
