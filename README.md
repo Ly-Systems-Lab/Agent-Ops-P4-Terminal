@@ -2,16 +2,19 @@
 
 **一台能听懂指令、也能被 Agent 驱动的触控终端 —— ESP32-P4 固件。**
 
-🔗 **三件套** · [🔭 总蓝图 · Architecture](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) · [🧠 控制面 · WeCom-Bridge](https://github.com/Ly-Systems-Lab/Agent-Ops-WeCom-Bridge) · [🔌 数据面 · Edge-Hub](https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub) · **🖥️ 端侧终端（本仓）**
+🔗 **三件套** · [🔭 总蓝图](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) · [🧠 控制面 · WeCom-Bridge](https://github.com/Ly-Systems-Lab/Agent-Ops-WeCom-Bridge) · [🔌 数据面 · Edge-Hub](https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub) · **🖥️ 端侧终端（本仓）**
 
-Agent-Ops 是一套分层的 Agent 编排结构：控制面管「人怎么指挥 Agent」，数据面管「Agent 怎么指挥设备」，
-本仓是这套结构里**被 Agent 指挥的那一端** —— 一台放在桌面上的 ESP32-P4 触控平板。
+本仓是 Agent-Ops 架构里的**端侧终端**：一台 10.1 英寸的 ESP32-P4 触控平板。
 
-> 在本项目里，「Agent-Ops」指端侧 Agent 的控制面/终端分层，与 `agentops.ai` 的观测平台无关。
+- **向上**：Hub 把用户敲的指令经 MQTT 交给 Agent，流式回执逐帧显示在屏幕上；
+- **向下**：Agent 也能反向驱动它 —— 打开音乐、打开小智、一键清后台。
+
+> 这套架构为什么这样分层、几个仓怎么配合 —— 见[总蓝图](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture)。
+> 本仓只讲设备本身。（「Agent-Ops」与 `agentops.ai` 的观测平台无关。）
 
 ---
 
-## 它长什么样
+## 它能做什么
 
 微雪 **ESP32-P4-WIFI6-Touch-LCD-10.1**（SKU 33672）出厂固件（ESP-Brookesia 手机风格桌面）的二次开发。
 保留出厂的桌面与应用框架，在此之上加了自己的应用与服务：
