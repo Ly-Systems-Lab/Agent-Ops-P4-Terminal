@@ -2,9 +2,9 @@
 
 **一台能听懂指令、也能被 Agent 驱动的触控终端 —— ESP32-P4 固件。**
 
-🔗 **三件套** · [🔭 总蓝图](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) · [🧠 控制面 · WeCom-Bridge](https://github.com/Ly-Systems-Lab/Agent-Ops-WeCom-Bridge) · [🔌 数据面 · Edge-Hub](https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub) · **🖥️ 端侧终端（本仓）**
+🔗 **三件套** · [🔭 总蓝图](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) · [🧠 控制面 · WeCom-Bridge](https://github.com/Ly-Systems-Lab/Agent-Ops-WeCom-Bridge) · [🔌 数据面 · Edge-Hub](https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub)
 
-本仓是 Agent-Ops 架构里的**端侧终端**：一台 10.1 英寸的 ESP32-P4 触控平板。
+本仓是基于 **Agent-Ops 架构（三件套）**的 **🖥️ 端侧终端**：一台 10.1 英寸的 ESP32-P4 触控平板。
 
 - **向上**：Hub 把用户敲的指令经 MQTT 交给 Agent，流式回执逐帧显示在屏幕上；
 - **向下**：Agent 也能反向驱动它 —— 打开音乐、打开小智、一键清后台。
@@ -25,14 +25,14 @@
 | 📷 **相机** | 实时预览与拍照 |
 | 🖼️ **相册** | JPEG / WebP；缩略图网格 → 1:1 明细图 → 缩放查看 |
 | 🎬 **视频** | MJPEG/AVI 播放，硬件 JPEG 解码 + PPA 缩放旋转，横竖屏切换 |
-| 🎵 **音乐** | MP3 播放，从 SD 卡读取，支持后台播放 |
+| 🎵 **音乐** | MP3 播放，可从 SD 卡读取，支持后台播放 |
 | ✏️ **画板 / 频谱分析 / 计算器** | 出厂示例应用 |
 | 🌐 **网页控制台** | 板子起 httpd，浏览器里管理文件、看设备状态 |
 | 💾 **U 盘模式** | 把 SD 卡通过 USB 交给电脑（MSC） |
 | ⚙️ **设置** | WLAN、显示方向、音量、亮度等，NVS 持久化 |
 | 🗣️ **小智 AI** | 语音对话（走小智官方云，需要联网） |
 | 💬 **Hub** | **对 Agent 下指令、看流式回执** —— 本仓与 Agent-Ops 的接点 |
-| 🤖 **MQTT 反控** | Agent 可以远程打开音乐 / 打开小智 / 一键清后台 |
+| 🤖 **MQTT 反控** | Agent 可以远程打开音乐 / 打开小智 / 一键清后台 —— 本仓与 Agent-Ops 的接点 |
 
 WiFi 开机自动连接、断线自愈；网络配置与 broker 参数都存在设备 NVS 里。
 
