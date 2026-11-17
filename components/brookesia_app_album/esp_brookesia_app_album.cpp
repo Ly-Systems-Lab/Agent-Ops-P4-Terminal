@@ -31,8 +31,9 @@
  * 这里刻意用 BSP 的宏而不是自己写死 "/sdcard"，免得哪天挂载点改了这里跟着漂。
  * 相应地 CMakeLists 的 REQUIRES 里要加 esp32_p4_wifi6_touch_lcd_x。
  *
- * 壁纸这条路径还要 bsp_extra_display_lock()：壁纸 worker 不是 LVGL 任务，
- * 它改桌面样式前必须拿同一把显示锁（它不在 LVGL 任务上，而桌面样式是框架的全局状态；锁又必须可重入，否则框架持锁调进来时会自锁死）。 */
+ * 壁纸这条路径还要 bsp_extra_display_lock()：壁纸 worker 不在 LVGL 任务上，
+ * 而桌面样式是框架的全局状态 ⇒ 改它之前必须拿同一把显示锁。
+ * 这把锁必须可重入 —— 框架有时是持着锁调进我们的回调的，不可重入就会当场自锁死。 */
 #include "bsp/esp-bsp.h"
 #include "bsp_board_extra.h"
 
