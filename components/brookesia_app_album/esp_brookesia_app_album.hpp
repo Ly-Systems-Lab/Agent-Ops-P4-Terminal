@@ -235,7 +235,22 @@ private:
     /* 网格里该用哪份位图：内嵌图借它自己的大图（只有 2 张，不心疼），上传图用它自己的小图。 */
     static const lv_image_dsc_t *_gridDsc(const Photo &p);
     void _buildGrid(void);
-    void _fillNextThumb(void);          /* 懒解码：每拍补一张网格小图 */
+    /* 同步补一张（只在 worker 建不起来时当兜底用）—— 它会**占住 LVGL 任务**
+     * 0.6~0.7 s，所以正常路径绝不走它，见下面那组。 */
+    void _fillNextThumb(void);
+    /* ---- 网格补图 worker ----
+     * 一张手机原图补一张小图 = 整个文件读进 PSRAM（2.5~3.5 MB）+ 软解 4 MP，
+     * 实测 76 / 205 / 601 / 650 ms。这段原来写在 lv_timer 里 ⇒ 补图期间界面几乎
+     * 画不出帧，用户实测"打开相册时滑动网格非常卡"。
+     * 现在拆成"LVGL 只收发、worker 干重活"：
+     *   _postThumbJob()  发一张出去（快照路径，不传 Photo 指针）
+     *   _takeThumbResult() 收一张回来挂上（微秒级）
+     *   _thumbBumpGen()  换一批图了 ⇒ 旧结果作废（跨任务只靠 gen 对齐）
+     */
+    void _thumbBumpGen(void);
+    bool _postThumbJob(int index);
+    bool _takeThumbResult(void);
+    static void _thumbTaskEntry(void *arg);
     void _syncThumbCells(void);         /* 把小图挂到对应格子上 */
 
     void _openFull(int index);

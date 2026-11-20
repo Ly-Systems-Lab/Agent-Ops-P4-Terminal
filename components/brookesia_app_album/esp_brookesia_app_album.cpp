@@ -73,6 +73,24 @@ static constexpr int ZOOM_BAR_W = 80;
  */
 static constexpr int JPEG_ALIGN = 16;
 
+/*
+ * `esp_new_jpeg` 的**降采样倍率有个没写在文档里的硬边界**：请求缩得太狠时
+ *    `jpeg_dec_parse_header` 直接返回 `JPEG_ERR_NO_MEM(-2)`，而当时内存明明充裕
+ *    （板子实测：PSRAM 空 18 MB、内部最大块 110 KB，前后一格没变）。
+ *    文档只写"maximum scale ratio is 1/8"，实测**连 1/8 都失败**。
+ *
+ *    2026-11-18 在板上逐档实测（其余条件完全相同）：
+ *      源 1080×1920：原尺寸 OK ｜ 1/2 (2.0x) OK ｜ 1/4 (4.2x) OK ｜ 1/8 (8.4x) **-2**
+ *      源 1280× 769：原尺寸 OK ｜ 1/2 (2.0x) OK ｜ 1/4 (4.0x) OK ｜ 1/8 (8.0x) **-2**
+ *                                              ｜缩略图 224 (5.7x) OK
+ *    ⇒ 边界落在 **5.7x 能、8.0x 不能** 之间。保守取 **4**（明确实测可用）。
+ *
+ *    症状是"某些图能看、某些图 decode failed"，而且**跟图的大小有关、跟格式无关** ——
+ *    当时是 6 张 4.2 MP 的手机原图全挂（缩略图要 12 倍），4 张 1280×720 的正常。
+ *    别再用"改大/改小 target_edge"去绕：越界的是**倍率**，不是目标尺寸。
+ */
+static constexpr int JPEG_MAX_DOWNSCALE = 4;
+
 /* 向下对齐到 JPEG_ALIGN，且不小于 JPEG_ALIGN。 */
 static inline int _alignJpeg(int v)
 {
@@ -358,6 +376,64 @@ static bool _upscaleBilinear(const uint8_t *src, int sw, int sh, int sstride,
     return true;
 }
 
+/*
+ * 盒式缩小：把 sw×sh 的 RGB565 位图缩到 dw×dh（必须是缩小，dw ≤ sw、dh ≤ sh）。
+ *
+ * 为什么需要它：`esp_new_jpeg` 的降采样**不能超过约 4 倍**（见 JPEG_MAX_DOWNSCALE）。
+ * 而网格缩略图要 224 长边，碰上 1920~2752 的手机原图就是 8~12 倍 ——
+ * 于是先让解码器解到"≤4 倍"的中间尺寸，再由这里缩到目标尺寸。
+ *
+ * 用**盒式平均**（每个目标像素 = 源图对应矩形的平均值）而不是最近邻：
+ * 缩 3 倍时最近邻会明显丢细节、边缘发跳；盒式在缩小时本身就有低通作用，
+ * 对缩略图这种"看个大概"的用途足够，而且比双线性便宜。
+ * 源矩形按整数边界切分（floor/ceil），每个源像素恰好被一个目标像素覆盖一次，
+ * 不会漏行漏列、也不会让整体亮度漂移。
+ */
+static void _downscaleBox565(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw, int dh)
+{
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || dw > sw || dh > sh) {
+        ESP_UTILS_LOGE("缩小参数非法：%dx%d -> %dx%d", sw, sh, dw, dh);
+        return;
+    }
+    for (int y = 0; y < dh; y++) {
+        const int y0 = (int)((int64_t)y * sh / dh);
+        int       y1 = (int)(((int64_t)(y + 1) * sh + dh - 1) / dh);
+        if (y1 <= y0) {
+            y1 = y0 + 1;
+        }
+        if (y1 > sh) {
+            y1 = sh;
+        }
+        uint16_t *drow = (uint16_t *)(dst + (size_t)y * (size_t)dw * 2u);
+        const uint32_t ny = (uint32_t)(y1 - y0);
+
+        for (int x = 0; x < dw; x++) {
+            const int x0 = (int)((int64_t)x * sw / dw);
+            int       x1 = (int)(((int64_t)(x + 1) * sw + dw - 1) / dw);
+            if (x1 <= x0) {
+                x1 = x0 + 1;
+            }
+            if (x1 > sw) {
+                x1 = sw;
+            }
+            uint32_t rs = 0;
+            uint32_t gs = 0;
+            uint32_t bs = 0;
+            for (int sy = y0; sy < y1; sy++) {
+                const uint16_t *srow = (const uint16_t *)(src + (size_t)sy * (size_t)sw * 2u);
+                for (int sx = x0; sx < x1; sx++) {
+                    const uint16_t v = srow[sx];
+                    rs += (v >> 11) & 0x1F;
+                    gs += (v >>  5) & 0x3F;
+                    bs += v & 0x1F;
+                }
+            }
+            const uint32_t n = (uint32_t)(x1 - x0) * ny;
+            drow[x] = (uint16_t)(((rs / n) << 11) | ((gs / n) << 5) | (bs / n));
+        }
+    }
+}
+
 /* 嵌进固件的图片，符号由 CMake 的 target_add_binary_data 生成（只取文件名） */
 extern "C" {
 extern const uint8_t _binary_photo1_jpg_start[];
@@ -411,6 +487,212 @@ static bool _jpegInfo(const uint8_t *d, size_t n, int &w, int &h, uint8_t *sof =
         i += 2 + seg;
     }
     return false;
+}
+
+/**
+ * 和 _jpegInfo 同一个目标，但**直接从文件里走**，不预设"文件头有多长"。
+ *
+ * 为什么必须另写一个：手机原图的 APPn 段可以大到十几 KB。
+ *    用户 2026-11-18 实测上传的 5 张 1536×2752 竖图，头部是一段 **14,266 B 的 APP11**
+ *    （相机/图库写的元数据），SOF0 落在文件偏移 **14,422** ——
+ *    扫描时只读前 4 KB 的话，永远走不到 SOF，格子上就写 "JPEG header bad"，
+ *    可文件本身是**完全正常的基线式 JPEG**（同样的图在电脑上打开毫无问题）。
+ *    判据：文件头长度**没有任何上限**，所以"读一段固定长度再解析"这个方法本身就是错的；
+ *    正确做法是按段长 seek 跳过，只看该看的那几个字节。
+ *
+ * 段结构（ISO/IEC 10918-1 §B.2）：FF <marker> <len_hi> <len_lo> <payload...>，
+ * len 含它自己那两个字节 ⇒ payload = len − 2。
+ * SOF 的 payload 头部是：精度(1) 高(2) 宽(2) 分量数(1)。
+ * 返回 false 的三种情况：不是 JPEG / 走到 SOS 或 EOI 都还没见到 SOF / 文件读不动。
+ */
+static bool _jpegInfoFile(const char *path, int &w, int &h, uint8_t *sof = nullptr)
+{
+    FILE *fp = fopen(path, "rb");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    bool ok = false;
+    int  b0 = fgetc(fp);
+    int  b1 = fgetc(fp);
+    if (b0 != 0xFF || b1 != 0xD8) {          /* 不是 SOI ⇒ 不是 JPEG */
+        fclose(fp);
+        return false;
+    }
+
+    /* 段数上限只是防损坏文件死循环，正常的 JPEG 段数个位数；
+     * 每段都按它自己声明的长度跳，所以 14 KB 的 APP11 只花一次 seek。 */
+    for (int guard = 0; guard < 256; guard++) {
+        int c = fgetc(fp);
+        while (c != EOF && c != 0xFF) {      /* 段之间不允许有杂物，但坏文件里见过，扫过去 */
+            c = fgetc(fp);
+        }
+        if (c == EOF) {
+            break;
+        }
+        int m = fgetc(fp);
+        while (m == 0xFF) {                  /* 填充字节：FF FF … FF <marker> */
+            m = fgetc(fp);
+        }
+        if (m == EOF) {
+            break;
+        }
+        if (m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+            continue;                        /* 无长度字段的独立标记 */
+        }
+        if (m == 0xD9 || m == 0xDA) {
+            break;                           /* EOI / 扫描开始：SOF 必须在它之前出现 */
+        }
+
+        const int hi  = fgetc(fp);
+        const int lo  = fgetc(fp);
+        if (hi == EOF || lo == EOF) {
+            break;
+        }
+        const int seg = (hi << 8) | lo;
+        if (seg < 2) {
+            break;
+        }
+
+        if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+            uint8_t f[7];                    /* 精度 / 高 / 宽 / 分量数 */
+            if (fread(f, 1, sizeof(f), fp) != sizeof(f)) {
+                break;
+            }
+            h = (f[1] << 8) | f[2];
+            w = (f[3] << 8) | f[4];
+            if (sof != nullptr) {
+                *sof = (uint8_t)m;
+            }
+            ok = (w > 0 && h > 0);
+            break;
+        }
+
+        if (fseek(fp, (long)(seg - 2), SEEK_CUR) != 0) {
+            break;
+        }
+    }
+
+    fclose(fp);
+    return ok;
+}
+
+/*
+ * 手机原图的**头部可能挂着很大的 APPn 段**：安卓新机拍照会写 C2PA 内容凭证
+ *    （APP11 / JUMBF）。实测一张 1536×2752 的照片带了 **14,266 B**，
+ *    而 `esp_new_jpeg` 的 `jpeg_dec_parse_header` **吃不下这种头** —— 直接返回失败。
+ *
+ *    表现最迷惑的地方：头里该有的东西全都正常（SOI / APP0 / DQT / SOF0 / DHT×4 / SOS，
+ *    基线式、8 bit、3 分量、段顺序与能正常显示的图**逐项一致**），
+ *    同样的字节拿到 PC 上解毫无问题 —— 只有这个解码器不认。
+ *    判据：**能正常显示的图，APPn 加起来最多 1.3 KB；失败的那批是 14 KB。**
+ *
+ *    ⇒ 喂给解码器之前把 APPn（E0~EF）和 COM（FE）段**就地剥掉**：
+ *      原缓冲里压缩，不额外占内存，剥完仍是合法的 JPEG（PC 端已逐张验证）。
+ *    只在"APPn 合计超过 JPEG_APP_BUDGET"时才剥 —— 正常图片保持原样，
+ *    免得去动 Adobe APP14 这类会影响颜色解释的段。
+ */
+static constexpr size_t JPEG_APP_BUDGET = 4096;
+
+/* 段头走一遍，累计 APPn / COM 的字节数（只读段头，不碰熵编码数据）。 */
+static size_t _jpegAppBytes(const uint8_t *d, size_t n)
+{
+    if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) {
+        return 0;
+    }
+    size_t i = 2;
+    size_t sum = 0;
+    for (int guard = 0; guard < 256; guard++) {
+        if (i + 4 > n || d[i] != 0xFF) {
+            break;
+        }
+        const uint8_t m = d[i + 1];
+        if (m == 0xDA || m == 0xD9) {
+            break;                                  /* 扫描数据 / 结束 */
+        }
+        if (m == 0xFF || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+            i += 2;                                 /* 填充字节 / 无长度的独立标记 */
+            continue;
+        }
+        const size_t seg = ((size_t)d[i + 2] << 8) | (size_t)d[i + 3];
+        if (seg < 2 || i + 2 + seg > n) {
+            break;
+        }
+        if ((m >= 0xE0 && m <= 0xEF) || m == 0xFE) {
+            sum += 2 + seg;
+        }
+        i += 2 + seg;
+    }
+    return sum;
+}
+
+/*
+ * 就地剥掉 APPn / COM 段，返回新的长度。
+ * `dst` 永远 ≤ `src`，所以从前往后压缩不会踩到还没读的数据；能走到 SOS 就把
+ * "SOS 到文件尾"整段搬下来（熵编码数据一个字节都不碰）。
+ * 中途遇到坏结构就停在原地、把剩下的原样搬下来 —— **绝不把它改得更坏**。
+ */
+static size_t _stripJpegApp(uint8_t *d, size_t n)
+{
+    if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) {
+        return n;
+    }
+    size_t src = 2;
+    size_t dst = 2;
+    for (int guard = 0; guard < 256; guard++) {
+        if (src + 2 > n || d[src] != 0xFF) {
+            break;
+        }
+        const uint8_t m = d[src + 1];
+        if (m == 0xDA || m == 0xD9) {
+            break;
+        }
+        if (m == 0xFF || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+            if (dst != src) {
+                memmove(d + dst, d + src, 2);
+            }
+            dst += 2;
+            src += 2;
+            continue;
+        }
+        if (src + 4 > n) {
+            break;
+        }
+        const size_t seg = ((size_t)d[src + 2] << 8) | (size_t)d[src + 3];
+        if (seg < 2 || src + 2 + seg > n) {
+            break;
+        }
+        const bool drop = (m >= 0xE0 && m <= 0xEF) || m == 0xFE;
+        if (!drop) {
+            if (dst != src) {
+                memmove(d + dst, d + src, 2 + seg);
+            }
+            dst += 2 + seg;
+        }
+        src += 2 + seg;
+    }
+    if (src < n) {
+        if (dst != src) {
+            memmove(d + dst, d + src, n - src);
+        }
+        dst += n - src;
+    }
+    return dst;
+}
+
+/* 喂给解码器之前的统一入口：头部太"胖"就先剥一层（就地改，返回新长度）。
+ * 网格小图、大图页基准/明细、壁纸三条路都要过这一关 —— 否则同一张图
+ * 在网格里能看、点开却失败，那种不一致最难查。 */
+static size_t _jpegPrepareForDecode(uint8_t *d, size_t n, const char *name)
+{
+    const size_t app = _jpegAppBytes(d, n);
+    if (app <= JPEG_APP_BUDGET) {
+        return n;
+    }
+    const size_t out = _stripJpegApp(d, n);
+    ESP_UTILS_LOGI("'%s': 头部 APPn/COM 共 %u B（C2PA/EXIF 之类），剥掉再解：%u -> %u B",
+                   name, (unsigned)app, (unsigned)n, (unsigned)out);
+    return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1027,6 +1309,13 @@ bool Album::_loadBuiltins(void)
 /* 放掉上一次扫到的上传条目（内嵌的**保留** —— 它们的位图常驻，重解是浪费）。 */
 void Album::_releaseUploads(void)
 {
+    /*
+     * 先把网格补图 worker 的"在途结果"作废。
+     * 顺序很重要：必须在下面 free 掉 grid_px **之前** 让 worker 交回的东西失效，
+     * 否则一张迟到的结果可能被挂到"重扫后同一个下标、但已经是另一张图"的条目上
+     * （它认的是下标，而重扫会重新排位）。
+     */
+    _thumbBumpGen();
     while (_photo_count > _builtin_count) {
         _photo_count--;
         Photo &p = _photos[_photo_count];
@@ -1121,8 +1410,12 @@ bool Album::_scanDir(const char *dir)
         }
 
         /*
-         * 读文件头（最多 4 KB）辨认。为什么只读头：这几 MB 的原图整张读进来只为拿个尺寸，
-         * 太亏了；而 JPEG 的 SOF、WebP 的 RIFF 头都在文件最前面。
+         * 先读文件头（最多 4 KB）**认格式**。为什么只读 4 KB：这几 MB 的原图整张读进来
+         * 只为拿个尺寸太亏了 —— 而认格式只需要开头那十几个字节。
+         *
+         * 但**尺寸不能再从这个 4 KB 里解析**：JPEG 的 SOF 未必在文件最前面，
+         *    手机原图的 APPn 段动辄十几 KB（实测一段 APP11 就有 14,266 B）。
+         *    所以下面走 _jpegInfoFile()，按段长 seek 过去看 —— 不预设头的长度。
          */
         uint8_t head[4096];
         size_t  got = 0;
@@ -1137,7 +1430,7 @@ bool Album::_scanDir(const char *dir)
         bool noted = false;
 
         if (sniffed != nullptr && strcmp(sniffed, "JPEG") == 0) {
-            if (_jpegInfo(head, got, p.src_w, p.src_h, &p.sof)) {
+            if (_jpegInfoFile(p.path, p.src_w, p.src_h, &p.sof)) {
                 p.src_max  = (p.src_w > p.src_h) ? p.src_w : p.src_h;
                 p.baseline = (p.sof == 0xC0);
             } else {
@@ -1251,9 +1544,29 @@ bool Album::_decodeTo(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
      *    里面用的 _alignJpeg 是 **16** 而不是文档写的 8，见 JPEG_ALIGN 的说明。 */
     const int longest = (ow > oh) ? ow : oh;
     _expectedOutSize(ow, oh, target_edge, out_w, out_h);
+
+    /*
+     * 先看"这个目标尺寸要求解码器缩几倍"。超过 JPEG_MAX_DOWNSCALE 就先解到一个
+     * 中间尺寸（解码器背得动），再用 _downscaleBox565() 软件缩到目标 ——
+     * 网格缩略图 224 长边碰 2752 的原图时就是这条路（要求缩 12 倍，解码器直接 -2）。
+     */
+    int  dec_edge   = target_edge;
+    bool post_scale = false;
     if (target_edge < longest) {
-        cfg.scale.width  = (uint16_t)out_w;
-        cfg.scale.height = (uint16_t)out_h;
+        int e = (longest + JPEG_MAX_DOWNSCALE - 1) / JPEG_MAX_DOWNSCALE;   /* 向上取整 */
+        e = ((e + JPEG_ALIGN - 1) / JPEG_ALIGN) * JPEG_ALIGN;              /* 再对齐到 16 */
+        if (e > target_edge) {
+            dec_edge   = e;
+            post_scale = true;
+        }
+    }
+
+    int dec_w = 0;
+    int dec_h = 0;
+    _expectedOutSize(ow, oh, dec_edge, dec_w, dec_h);
+    if (dec_edge < longest) {
+        cfg.scale.width  = (uint16_t)dec_w;
+        cfg.scale.height = (uint16_t)dec_h;
     }
     /* else：不缩放 —— 走解码器的原始分辨率路径（任意宽高都支持，不受 16 约束）。 */
 
@@ -1270,8 +1583,10 @@ bool Album::_decodeTo(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
 
     jpeg_dec_header_info_t info;
     memset(&info, 0, sizeof(info));
-    if (jpeg_dec_parse_header(dec, &io, &info) != JPEG_ERR_OK) {
-        ESP_UTILS_LOGE("'%s': parse header failed", p.name);
+    const jpeg_error_t hdr_err = jpeg_dec_parse_header(dec, &io, &info);
+    if (hdr_err != JPEG_ERR_OK) {
+        /* 带上错误码：下次再遇到"解不了"的素材，这一行能直接分出是头不合规还是别的 */
+        ESP_UTILS_LOGE("'%s': parse header failed (err=%d)", p.name, (int)hdr_err);
         jpeg_dec_close(dec);
         return false;
     }
@@ -1282,7 +1597,24 @@ bool Album::_decodeTo(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
         jpeg_dec_close(dec);
         return false;
     }
-    if ((size_t)out_len > buf_size) {
+
+    /* 解码落点：正常情况下直接写调用方的 buf；"先解中间尺寸"时写临时缓冲。 */
+    uint8_t *dec_buf = buf;
+    size_t   dec_cap = buf_size;
+    uint8_t *scratch = nullptr;
+    if (post_scale) {
+        dec_cap = (size_t)out_len;      /* 解码器自己报的精确值 */
+        scratch = (uint8_t *)heap_caps_aligned_alloc(16, dec_cap,
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (scratch == nullptr) {
+            ESP_UTILS_LOGE("'%s': 中间缓冲 %u B 分配失败（PSRAM free %u KB）", p.name,
+                           (unsigned)dec_cap,
+                           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            jpeg_dec_close(dec);
+            return false;
+        }
+        dec_buf = scratch;
+    } else if ((size_t)out_len > buf_size) {
         ESP_UTILS_LOGE("'%s': need %d B but buf only %u B", p.name, out_len, (unsigned)buf_size);
         jpeg_dec_close(dec);
         return false;
@@ -1295,22 +1627,25 @@ bool Album::_decodeTo(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
      * 万一日后遇到本文没覆盖到的坏尺寸，会走失败分支而不是画花。
      * （真实像素碰巧整行都是 0xAA 的概率可忽略：1280 个像素 ≈ 1/256^2560。）
      */
-    const size_t tail = (size_t)out_w * 2u;
+    const size_t tail = (size_t)dec_w * 2u;
     const bool   guard_armed = (tail > 0 && (size_t)out_len >= tail);
     if (guard_armed) {
-        memset(buf + (size_t)out_len - tail, 0xAA, tail);
+        memset(dec_buf + (size_t)out_len - tail, 0xAA, tail);
     }
 
-    io.outbuf   = buf;
+    io.outbuf   = dec_buf;
     io.out_size = out_len;
     if (jpeg_dec_process(dec, &io) != JPEG_ERR_OK) {
         ESP_UTILS_LOGE("'%s': jpeg_dec_process failed", p.name);
         jpeg_dec_close(dec);
+        if (scratch != nullptr) {
+            heap_caps_free(scratch);
+        }
         return false;
     }
 
     if (guard_armed) {
-        const uint8_t *last = buf + (size_t)out_len - tail;
+        const uint8_t *last = dec_buf + (size_t)out_len - tail;
         bool untouched = true;
         for (size_t i = 0; i < tail; i++) {
             if (last[i] != 0xAA) {
@@ -1320,13 +1655,33 @@ bool Album::_decodeTo(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
         }
         if (untouched) {
             ESP_UTILS_LOGE("'%s': 解码器截断输出（%dx%d 的最后一行没被写）—— 丢弃不用",
-                           p.name, out_w, out_h);
+                           p.name, dec_w, dec_h);
             jpeg_dec_close(dec);
+            if (scratch != nullptr) {
+                heap_caps_free(scratch);
+            }
             return false;
         }
     }
 
     jpeg_dec_close(dec);
+
+    /*
+     * 收尾：先解中间尺寸的那条路，在这里把结果缩到调用方要的尺寸。
+     * `out_len` 也必须改成**最终**字节数 —— 调用方都是拿它算 stride / data_size 的
+     * （网格小图的 dsc 就是 len / h）。
+     */
+    if (post_scale) {
+        if ((size_t)out_len != (size_t)dec_w * (size_t)dec_h * 2u) {
+            ESP_UTILS_LOGE("'%s': 解码器给的 out_len=%d 与预期 %dx%d 不符，放弃",
+                           p.name, out_len, dec_w, dec_h);
+            heap_caps_free(scratch);
+            return false;
+        }
+        _downscaleBox565(scratch, dec_w, dec_h, buf, out_w, out_h);
+        heap_caps_free(scratch);
+        out_len = out_w * out_h * 2;
+    }
     return true;
 }
 
@@ -1347,6 +1702,15 @@ bool Album::_decodeAt(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
     if (jpeg == nullptr) {
         ESP_UTILS_LOGE("'%s': 读原图失败", p.name);
         return false;
+    }
+
+    /*
+     * 手机原图的头部可能挂着十几 KB 的 APPn（安卓新机的 C2PA 内容凭证），
+     * esp_new_jpeg 的头解析吃不下 —— 见 JPEG_APP_BUDGET 上面那段。
+     * 就地剥掉即可，**不额外占内存**，熵编码数据一个字节都不碰。
+     */
+    if (!p.is_webp) {
+        jpeg_len = _jpegPrepareForDecode(jpeg, jpeg_len, p.name);
     }
 
     /* 借用 _decodeTo 的"从内存解码"接口：临时把文件字节挂到一份拷贝上，
@@ -2239,12 +2603,81 @@ void Album::_syncThumbCells(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* 网格补图 worker                                                      */
+/* ------------------------------------------------------------------ */
+
 /*
- * 懒解码：一拍补一张网格小图，补完自己停。
+ * 为什么要单开一个任务（2026-11-18 用户实测："打开相册时滑动网格非常卡"）：
+ * 给一张手机原图补一张小图 = 把整个文件读进 PSRAM（这批 2.5~3.5 MB）+ 软解 4 MP。
+ * 历史日志里的实测：**读+解 76 / 205 / 601 / 650 ms**。
+ * 这段原来是**在 LVGL 任务里同步做的**（lv_timer 每 50 ms 一拍）⇒ 补图期间界面
+ * 几乎画不出帧，手一滑就顿住。现在搬到 worker 上，LVGL 只负责"发一张、收一张"，
+ * 两个动作都是微秒级 —— 补图总时长不变，但界面不再被它占着。
  *
- * 为什么要懒：一张几 MB 的图，读盘 + 解码要几百毫秒。开机后第一次进相册时
- * 如果一口气把 N 张全解完，界面会僵住好几秒。**先让占位格顶上，再一拍一张地补** ——
- * 用户看到的是"格子陆续亮起来"，而不是"点了相册没反应"。
+ * 跨任务只共享下面这几个静态槽，**不共享 _photos**：
+ *   · 发出去的是一份快照（路径 / 格式），worker 永远不碰 Photo 结构；
+ *   · 收回来的是一块新分配的像素缓冲，所有权在"提交到结果槽"那一刻转移；
+ *   · 重扫目录时 gen +1，worker 交回的旧结果一律丢弃 —— 它认的是**下标**，
+ *     而重扫会重新排位（跨任务共享的东西一旦可能被销毁，先答"还属于同一批吗"）。
+ */
+struct AlbumThumbJob {
+    bool     valid;
+    uint32_t gen;
+    int      index;
+    bool     is_webp;
+    char     name[96];      /* 与 Album::ALBUM_NAME_MAX 一致 */
+    char     path[192];     /* 与 Album::ALBUM_PATH_MAX 一致 */
+};
+
+struct AlbumThumbResult {
+    bool     valid;
+    uint32_t gen;
+    int      index;
+    int      err;           /* 0 = 成功；1 = 分配失败；2 = 解码失败 */
+    uint8_t *px;            /* 成功时所有权随结果一起交给 LVGL 任务 */
+    int      w;
+    int      h;
+    int      len;
+};
+
+static AlbumThumbJob    s_tj {};            /* 待办槽（单槽：一次只让 worker 做一张） */
+static AlbumThumbResult s_tt {};            /* 结果槽（单槽） */
+static SemaphoreHandle_t s_tj_mutex = nullptr;
+static SemaphoreHandle_t s_tj_sem   = nullptr;
+static TaskHandle_t      s_tj_task  = nullptr;
+static std::atomic<uint32_t> s_tj_gen{1};
+/* 下面两个只由 LVGL 任务读写 */
+static bool s_tj_inflight = false;   /* 有一张还在 worker 手上 */
+static bool s_tj_broken   = false;   /* worker 建不起来 ⇒ 退回同步补图 */
+
+/* 换一批图了：让"正在解的那张"和"结果槽里那张"全部作废。 */
+void Album::_thumbBumpGen(void)
+{
+    s_tj_gen.fetch_add(1);
+    s_tj_inflight = false;
+    if (s_tj_mutex == nullptr) {
+        return;     /* 任务还没建起来，没有 in-flight 可言 */
+    }
+    if (xSemaphoreTake(s_tj_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;     /* 拿不到锁也没关系：结果被收走时会按 gen 再判一次 */
+    }
+    s_tj.valid = false;
+    if (s_tt.valid) {
+        if (s_tt.px != nullptr) {
+            heap_caps_free(s_tt.px);
+        }
+        s_tt = {};
+    }
+    xSemaphoreGive(s_tj_mutex);
+}
+
+/*
+ * 同步补一张 —— **只在 worker 建不起来时当兜底**。
+ * 它占住 LVGL 任务整整一次解码时间（0.2~0.7 s），宁可卡一点也别让格子永远空着。
+ *
+ * 正常路径下"懒"的意义：一张几 MB 的图读盘 + 解码要几百毫秒，
+ * 一进相册就全解完界面会僵住好几秒 ⇒ 先让占位格顶上，再一张一张地补。
  * 小图**只存内存、不落盘**：早期那套上传时预生成 .thumbs 的路子已经判过回退，别捡回来。
  */
 void Album::_fillNextThumb(void)
@@ -2295,22 +2728,229 @@ void Album::_fillNextThumb(void)
     }
 }
 
+/* 把第 index 张发给 worker。返回 true = 发出去了；false = 这一次没发成（下一拍再试）。 */
+bool Album::_postThumbJob(int index)
+{
+    if (index < 0 || index >= _photo_count) {
+        return false;
+    }
+    const Photo &p = _photos[index];
+    if (!p.from_file || p.path[0] == '\0') {
+        return false;
+    }
+
+    if (s_tj_broken) {
+        return false;
+    }
+    if (s_tj_sem == nullptr) {
+        s_tj_mutex = xSemaphoreCreateMutex();
+        s_tj_sem   = xSemaphoreCreateBinary();
+        if (s_tj_mutex == nullptr || s_tj_sem == nullptr) {
+            ESP_UTILS_LOGE("网格补图：信号量建不起来，退回同步补图");
+            s_tj_broken = true;
+            return false;
+        }
+    }
+    if (s_tj_task == nullptr) {
+        /* 12 KB 栈 —— 和壁纸 worker 取同一个值：它同样要走"读整个文件 + 解码"那条路，
+         * 而 WebP 的 libwebp 栈开销不小；栈不够的表现是**随机复位**，最难查。
+         * 优先级 4（LVGL 是 10、壁纸 worker 是 5），钉在 core 0：别去抢界面核。
+         * 每张解完会打印 high-water mark，按实测再调。 */
+        if (xTaskCreatePinnedToCore(_thumbTaskEntry, "album_thumb", 12 * 1024, this, 4,
+                                    &s_tj_task, 0) != pdPASS) {
+            s_tj_task = nullptr;
+            ESP_UTILS_LOGE("网格补图：任务建不起来（内部 RAM 太紧？），退回同步补图");
+            s_tj_broken = true;
+            return false;
+        }
+        ESP_UTILS_LOGI("网格补图 worker 已启动（12 KB 栈，core 0，prio 4）");
+    }
+
+    if (xSemaphoreTake(s_tj_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return false;       /* worker 只在拷贝结构体时持锁，拿不到就是极少见的撞车 */
+    }
+    s_tj.valid   = true;
+    s_tj.gen     = s_tj_gen.load();
+    s_tj.index   = index;
+    s_tj.is_webp = p.is_webp;
+    memcpy(s_tj.name, p.name_buf, sizeof(s_tj.name));
+    memcpy(s_tj.path, p.path, sizeof(s_tj.path));
+    xSemaphoreGive(s_tj_mutex);
+
+    s_tj_inflight = true;
+    xSemaphoreGive(s_tj_sem);
+    return true;
+}
+
+/*
+ * 收一张结果并挂到格子上。返回 true 表示"界面需要同步一次"。
+ *
+ * 陈旧判据（一次性判完，别分几处）：gen 对得上、下标还在范围内、那条还是"上传图"、
+ * 而且它此刻**还没**图也没判失败 —— 否则自由这块缓冲，绝不往别人身上写。
+ */
+bool Album::_takeThumbResult(void)
+{
+    AlbumThumbResult r {};
+    bool have = false;
+    if (s_tj_mutex != nullptr && xSemaphoreTake(s_tj_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        if (s_tt.valid) {
+            r    = s_tt;
+            s_tt = {};
+            have = true;
+        }
+        xSemaphoreGive(s_tj_mutex);
+    }
+    if (!have) {
+        return false;
+    }
+    s_tj_inflight = false;
+
+    const bool fresh = (r.gen == s_tj_gen.load()) && r.index >= 0 && r.index < _photo_count &&
+                       _photos[r.index].from_file && _photos[r.index].grid_px == nullptr &&
+                       _photos[r.index].grid_note == nullptr;
+    if (!fresh) {
+        if (r.px != nullptr) {
+            heap_caps_free(r.px);
+        }
+        return false;
+    }
+
+    Photo &p = _photos[r.index];
+    if (r.err != 0 || r.px == nullptr) {
+        p.grid_note = (r.err == 1) ? "out of memory" : "decode failed";
+        _failed_count++;
+        ESP_UTILS_LOGE("'%s': 网格小图%s", p.name,
+                       (r.err == 1) ? "分配失败" : "解码失败");
+        return true;
+    }
+
+    p.grid_px  = r.px;
+    p.grid_w   = r.w;
+    p.grid_h   = r.h;
+    memset(&p.grid_dsc, 0, sizeof(p.grid_dsc));
+    p.grid_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    p.grid_dsc.header.cf     = LV_COLOR_FORMAT_RGB565;
+    p.grid_dsc.header.w      = (uint32_t)r.w;
+    p.grid_dsc.header.h      = (uint32_t)r.h;
+    p.grid_dsc.header.stride = (uint32_t)(r.len / r.h);
+    p.grid_dsc.data_size     = (uint32_t)r.len;
+    p.grid_dsc.data          = r.px;
+    return true;
+}
+
+void Album::_thumbTaskEntry(void *arg)
+{
+    Album *self = static_cast<Album *>(arg);
+    for (;;) {
+        if (xSemaphoreTake(s_tj_sem, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        AlbumThumbJob job {};
+        if (xSemaphoreTake(s_tj_mutex, portMAX_DELAY) == pdTRUE) {
+            job = s_tj;
+            s_tj.valid = false;
+            xSemaphoreGive(s_tj_mutex);
+        }
+        if (!job.valid || self == nullptr) {
+            continue;
+        }
+
+        const int64_t t0 = esp_timer_get_time();
+
+        AlbumThumbResult r {};
+        r.gen   = job.gen;
+        r.index = job.index;
+
+        const size_t cap = (size_t)(GRID_EDGE + 16) * (size_t)(GRID_EDGE + 16) * 2u;
+        uint8_t *buf = (uint8_t *)heap_caps_aligned_alloc(16, cap,
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buf == nullptr) {
+            r.err = 1;
+        } else {
+            /* 用一份**临时 Photo** 走既有的解码入口：它只认 path / is_webp / name。
+             * 这样 worker 里没有任何一处碰到真正的 _photos。 */
+            Photo tmp {};
+            tmp.from_file = true;
+            tmp.is_webp   = job.is_webp;
+            memcpy(tmp.name_buf, job.name, sizeof(tmp.name_buf));
+            tmp.name = tmp.name_buf;
+            memcpy(tmp.path, job.path, sizeof(tmp.path));
+
+            int w = 0;
+            int h = 0;
+            int len = 0;
+            if (self->_decodeAt(tmp, GRID_EDGE, buf, cap, w, h, len)) {
+                r.px  = buf;
+                r.w   = w;
+                r.h   = h;
+                r.len = len;
+            } else {
+                heap_caps_free(buf);
+                r.err = 2;
+            }
+        }
+
+        if (xSemaphoreTake(s_tj_mutex, portMAX_DELAY) == pdTRUE) {
+            if (s_tt.valid) {           /* 上一张还没被收走：丢掉，别在后台堆内存 */
+                if (s_tt.px != nullptr) {
+                    heap_caps_free(s_tt.px);
+                }
+                s_tt = {};
+            }
+            s_tt       = r;
+            s_tt.valid = true;
+            xSemaphoreGive(s_tj_mutex);
+        } else if (r.px != nullptr) {
+            heap_caps_free(r.px);
+        }
+
+        if (r.err == 0) {
+            ESP_UTILS_LOGI("'%s': 网格小图 %dx%d，读+解共 %lld ms（worker 栈余量 %u B）",
+                           job.name, r.w, r.h,
+                           (long long)((esp_timer_get_time() - t0) / 1000),
+                           (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+        }
+    }
+}
+
+/*
+ * 每 50 ms 一拍。现在它只做三件极轻的事：收结果、发下一张、没活儿了就停表。
+ * **绝不在这里解码** —— 那就是原来卡顿的根源（见上面 worker 的说明）。
+ */
 void Album::_onThumbTick(lv_timer_t *t)
 {
     (void)t;
     if (_instance == nullptr || _instance->_grid == nullptr) {
         return;     /* 不在前台的兜底：_grid 为 null 说明屏幕已经没了，别碰任何 lv 对象 */
     }
-    /* 还没补齐就补一张；补齐了就把自己停掉，别白跑 */
+
+    /* ① 先收：worker 解好一张就挂上去 */
+    if (_instance->_takeThumbResult()) {
+        _instance->_syncThumbCells();
+    }
+
+    /* ② 手上还有一张在解：别再发，让 worker 一张一张来 */
+    if (s_tj_inflight) {
+        return;
+    }
+
+    /* ③ 找下一张待补的 */
     for (int i = 0; i < _instance->_photo_count; i++) {
         const Photo &p = _instance->_photos[i];
-        if (p.from_file && p.grid_note == nullptr && p.grid_px == nullptr) {
+        if (!p.from_file || p.grid_note != nullptr || p.grid_px != nullptr) {
+            continue;
+        }
+        _instance->_postThumbJob(i);
+        if (s_tj_broken) {
+            /* worker 建不起来 ⇒ 退回同步补一张（会卡一下，但格子不会永远空着） */
             _instance->_fillNextThumb();
             _instance->_syncThumbCells();
-            return;
         }
+        return;
     }
-    lv_timer_pause(t);
+
+    lv_timer_pause(t);      /* 没有待补的了，停表 */
 }
 
 /* ------------------------------------------------------------------ */
@@ -2942,23 +3582,43 @@ bool _wpSaveOne(const char *fs_root, const char *dst, const char *tmp,
 }
 
 /*
- * 落盘入口：**SD 优先**，/data 只作退路。
- * 依据见上面壁纸落盘位置的实测：写 /data 的 2 MB 会让整个 SoC 卡 20 秒以上。
+ * 落盘入口：**SD 优先；SD 插着但这次写失败，就干脆不落盘**。
+ *
+ * 2026-11-18 实测（用户报"连续设几张壁纸后闪蓝屏卡死"）：插着 SD、但那一刻
+ *    PSRAM 被吃紧 ⇒ `sdmmc_cmd: allocate_dma_buf: not enough mem` ⇒ 写 SD 失败。
+ *    老代码于是退回写 `/data`，而那一次实测**写盘用了 68 秒** —— 运行期写 flash
+ *    会让整个 SoC 停摆（代码 XIP，写/擦期间取指停），界面不刷新、触摸 I2C 读超时，
+ *    表现就是"闪蓝屏、整机卡死"。
+ *    ⇒ **一次可恢复的写盘失败，被退路放大成了整机卡死**（退路的教训：
+ *      宁可"不方便"也不要"不可预期"）。
+ *
+ * 现在的规矩：
+ *   · SD 插着：试两次（中间让出 CPU 一下，让那次瞬时的 DMA 分配失败自行缓解）；
+ *     还失败就**放弃落盘**并明确打日志 —— 壁纸本次照样生效，只是**重启后回到上一张**。
+ *   · SD 没插：才走 /data（那种场景没有别的选择，冻结时间已知、别再叠加）。
  */
 bool _wpSave(const uint8_t *pixels, int w, int h)
 {
     WpSaveGuard guard;      /* 同一时刻只允许一个写者，见 s_wp_save_io 的说明 */
     const WpPaths paths = _wpPaths(w, h);   /* 按方向分开存：横/竖屏互不覆盖 */
 
-    if (_wpSdMounted() &&
-            _wpSaveOne(BSP_SD_MOUNT_POINT, paths.sd, paths.sd_tmp, pixels, w, h)) {
-        return true;
-    }
     if (_wpSdMounted()) {
-        ESP_UTILS_LOGW("壁纸写 SD 失败，退回 /data（flash 写会卡界面约 25 秒）");
-    } else {
-        ESP_UTILS_LOGW("SD 卡没挂上，壁纸退回 /data（flash 写会卡界面约 25 秒）");
+        for (int attempt = 0; attempt < 2; attempt++) {
+            if (_wpSaveOne(BSP_SD_MOUNT_POINT, paths.sd, paths.sd_tmp, pixels, w, h)) {
+                return true;
+            }
+            if (attempt == 0) {
+                /* DMA 缓冲分不出来是瞬时的（别人刚释放就能成）—— 让出 CPU 再来一次 */
+                ESP_UTILS_LOGW("壁纸写 SD 失败，200 ms 后重试一次");
+                vTaskDelay(pdMS_TO_TICKS(200));
+            }
+        }
+        ESP_UTILS_LOGE("壁纸写 SD 两次都失败，**本次不落盘**"
+                       "（本次设置照常生效；重启后会回到上一张壁纸）");
+        return false;
     }
+
+    ESP_UTILS_LOGW("SD 卡没挂上，壁纸退回 /data（flash 写会让界面卡住几十秒）");
     return _wpSaveOne("/data", paths.data, paths.data_tmp, pixels, w, h);
 }
 
@@ -3327,15 +3987,14 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
     }
 
     /*
-     * 目标缓冲的选择（实测修正）：
+     * 解码**默认落在私有临时缓冲**里，绝不能落在常驻缓冲上。
      *
-     *   - 已经有常驻壁纸缓冲时，**优先**用一块私有临时缓冲 —— 解码失败不会破坏当前壁纸。
-     *   - 但 PSRAM 一碎片，2 MB 的**连续**临时缓冲就分不出来（实测第二次设壁纸时
-     *     free 还有 4.9 MB，largest 已经 < 2 MB）。这时退回**直接解进常驻缓冲**：
-     *     相册的屏幕盖在桌面之上，桌面此刻不会渲染，所以"写脏"不可见；
-     *     万一解码失败，再从 /data 把上一张壁纸读回来（见下面的失败分支）。
-     *   - 还没有常驻缓冲（本机第一次设壁纸）⇒ 直接分配常驻缓冲、解进去，
-     *     省掉"临时 + 常驻"两份 2 MB 同时挂着。
+     * 常驻缓冲（`s_wp.buf`）此刻**正挂在桌面的 `bg_img_src` 上** —— LVGL 随时可能
+     * 去读它。worker 一边往里写、渲染那边一边读同一块内存，画面就会读到半新半旧的
+     * 像素。2026-11-18 实测后果：**连续设几张壁纸后闪蓝屏、界面卡死**（我上一版
+     * 把它改成"总是解进常驻缓冲"，等于把这个窄竞态变成了每次必现）。
+     * ⇒ 默认走私有缓冲；只有它分不出来时才退到常驻缓冲，而**退之前必须先把
+     *    桌面上的 `bg_img_src` 摘掉**（见下面那段），让没人再读它。
      */
     const bool had_persistent = (s_wp.buf != nullptr && s_wp.cap >= bytes);
     bool used_persistent = false;
@@ -3368,11 +4027,34 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
         }
         tmp = s_wp.buf;
         used_persistent = true;
+
+        /*
+         * 退到常驻缓冲之前，**先把桌面上的引用摘掉**。
+         * 不摘就是在"渲染正在读的内存"上写 —— 闪蓝屏那次的直接原因。
+         * 摘掉之后桌面会暂时变回纯色背景，但相册盖在上面根本看不见；
+         * 解完（成功或失败）都会重新挂上（见后面的 `_wpApply()` / 失败分支）。
+         */
+        if (bsp_extra_display_lock(1000)) {
+            auto *ctx0 = getSystemContext();
+            lv_obj_t *ms0 = (ctx0 != nullptr) ?
+                            ctx0->getDisplay().getMainScreenObject() : nullptr;
+            if (ms0 != nullptr) {
+                lv_obj_set_style_bg_image_src(ms0, nullptr, 0);
+                lv_obj_invalidate(ms0);
+            }
+            bsp_extra_display_unlock();
+        }
+
         ESP_UTILS_LOGW("壁纸就地解码：没有连续的 %u B 可用（free %u KB / largest %u KB）",
                        (unsigned)bytes,
                        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
                        (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
     }
+
+    ESP_UTILS_LOGI("壁纸任务开始：%s %dx%d -> %dx%d（PSRAM free %u KB / largest %u KB）",
+                   job.from_file ? job.path : "builtin", job.src_w, job.src_h, W, H,
+                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                   (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
 
     uint8_t *file_data = nullptr;
     size_t   file_len  = 0;
@@ -3382,6 +4064,11 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
         file_data = _readFileAlloc(job.path, &file_len);
         data = file_data;
         len = file_len;
+        if (file_data != nullptr && !job.is_webp) {
+            /* 和网格/大图页走同一道预处理：手机原图的 APPn 可能胖到解码器吃不下 */
+            file_len = _jpegPrepareForDecode(file_data, file_len, job.path);
+            len = file_len;
+        }
     }
     const char *name = job.from_file ? job.path : "builtin";
 
@@ -3414,12 +4101,40 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
                     dec_edge = JPEG_ALIGN;
                 }
 
-                int dw = 0, dh = 0;
-                _expectedOutSize(job.src_w, job.src_h, dec_edge, dw, dh);
-                const size_t cap = (size_t)dw * (size_t)dh * 2u;
-                uint8_t *dec = (uint8_t *)heap_caps_aligned_alloc(
-                                   16, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                if (dec != nullptr) {
+                /*
+                 * 分配失败就**降一档再试**：PSRAM 碎片时"分不出一块大的"是常态
+                 *（能降级就别写成一票否决）。降档的那几档由 _upscaleBilinear
+                 * 补回来，画面略软，但用户要的是"能设上"而不是"一定要最清晰"。
+                 * 解码本身失败**不重试** —— 降分辨率救不回坏文件。
+                 */
+                for (int attempt = 0; attempt < 6; attempt++) {
+                    int dw = 0;
+                    int dh = 0;
+                    _expectedOutSize(job.src_w, job.src_h, dec_edge, dw, dh);
+                    const size_t cap = (size_t)dw * (size_t)dh * 2u;
+                    uint8_t *dec = (uint8_t *)heap_caps_aligned_alloc(
+                                       16, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (dec == nullptr) {
+                        ESP_UTILS_LOGW("壁纸临时图 %u B 分配失败（free %u KB / largest %u KB），"
+                                       "降到 %d 再试",
+                                       (unsigned)cap,
+                                       (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                                       (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
+                                       (int)_alignJpeg(dec_edge * 3 / 4));
+                        /*
+                         * 每档只降 3/4，而不是直接砍半：实测理想档（1424）要 2.2 MB，
+                         * 而临时缓冲占掉 2 MB 之后最大连续块只剩 ~1 MB ——
+                         * 砍半到 712 能过、但壁纸要放大近 2 倍（发软）。降 3/4 到 1068
+                         * 只要 1.26 MB，刚好塞得下，清晰度明显好一档。
+                         */
+                        dec_edge = _alignJpeg(dec_edge * 3 / 4);
+                        if (dec_edge < JPEG_ALIGN * 4) {
+                            break;
+                        }
+                        vTaskDelay(1);      /* 让一拍，别把 cpu0 的 IDLE 饿到触发任务看门狗 */
+                        continue;
+                    }
+
                     Photo p {};
                     p.name     = name;
                     p.data     = data;
@@ -3427,6 +4142,9 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
                     p.is_webp  = false;
                     int ow = 0, oh = 0, olen = 0;
                     if (_decodeTo(p, dec_edge, dec, cap, ow, oh, olen)) {
+                        /* 解码是这一路里最长的一段；让一拍再去做重采样，
+                         * 免得 cpu0 的 IDLE 被饿到触发任务看门狗（2026-11-18 实测踩过）。 */
+                        vTaskDelay(1);
                         int dcw = 0, dch = 0, dcx = 0, dcy = 0;
                         _coverRect(ow, oh, W, H, dcw, dch, dcx, dcy);
                         if (dcw == W && dch == H) {
@@ -3443,10 +4161,7 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
                         }
                     }
                     heap_caps_free(dec);
-                } else {
-                    ESP_UTILS_LOGE("壁纸 JPEG 临时图 %u B 分配失败（PSRAM free %u KB）",
-                                   (unsigned)cap,
-                                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+                    break;
                 }
             }
         }
@@ -3464,7 +4179,8 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
                                     ctx->getDisplay().getMainScreenObject() : nullptr;
             if (main_screen != nullptr) {
                 if (!used_persistent) {
-                    /* tmp 是私有缓冲；把它拷进常驻缓冲。 */
+                    /* tmp 是私有缓冲；把它拷进常驻缓冲。
+                     * 这一步在锁内做，所以不会和渲染撞上。 */
                     if (s_wp.buf == nullptr || s_wp.cap < bytes) {
                         uint8_t *nb = (uint8_t *)heap_caps_aligned_alloc(
                                           64, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -3525,13 +4241,20 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
                                     ctx->getDisplay().getMainScreenObject() : nullptr;
             if (main_screen != nullptr && used_persistent && had_persistent) {
                 if (recovered) {
-                    lv_obj_invalidate(main_screen);
+                    /* 原地解码前我们**把桌面的 bg_img_src 摘掉了**（否则会在
+                     * 渲染正在读的内存上写）。读回上一张之后必须重新挂上，
+                     * 光 invalidate 是画不出壁纸的。 */
+                    _wpApply(main_screen);
                 } else {
                     lv_obj_set_style_bg_image_src(main_screen, nullptr, 0);
                     lv_obj_invalidate(main_screen);
                     s_wp.w = 0;
                     s_wp.h = 0;
                 }
+            } else if (main_screen != nullptr && used_persistent) {
+                /* 第一次设壁纸就失败：常驻缓冲已经还回去了，桌面回到纯色 */
+                lv_obj_set_style_bg_image_src(main_screen, nullptr, 0);
+                lv_obj_invalidate(main_screen);
             }
             _wpSetNote("Failed", 0xFF8A80, 2500);
             bsp_extra_display_unlock();
