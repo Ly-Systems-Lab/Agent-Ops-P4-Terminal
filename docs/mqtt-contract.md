@@ -36,7 +36,7 @@ P4 的 Hub app ──MQTT publish──> broker ──> Agent 适配器
 | 语音输入 | ❌ | 端侧只有唤醒词 + 命令词，**没有自由 ASR**；v1 全部靠手打 |
 | 聊天 UI（Hub） | ✅ | 气泡列表、流式填空、屏幕上最多保留 50 条、重启后历史还在 |
 | MQTT 客户端 | ✅ | TLS 双向认证；上线状态、聊天收发、反控命令均已实现 |
-| 反控命令 | ✅ | 只有三条固定命令，见第 11 节 |
+| 反控命令 | ✅ | 本仓演示三条命令；命令表可自行扩展，见第 11 节 |
 
 ---
 
@@ -267,7 +267,7 @@ mosquitto_sub -h <broker-ip> -u observer -P '<password>' -t 'hub/#' -v
 - ❌ 多会话 / 会话切换（只有一条对话流）
 - ❌ 消息撤回
 - ❌ 离线消息补发
-- ❌ 通用远程控制（只有第 11 节那三条固定命令）
+- ❌ 拿来即用的通用远程控制（本仓只演示第 11 节那三条；命令表是开放的，按 §11.5 自己加）
 
 ---
 
@@ -306,10 +306,11 @@ mosquitto_sub -h <broker-ip> -u observer -P '<password>' -t 'hub/#' -v
 
 ## 11. 反控命令
 
-> 定位：**验证设备能被 Agent 驱动**，不是"通用远程控制"。
+> 定位：本仓只带三条命令，用来**验证设备能被 Agent 驱动**。这是最小闭环演示，不是能力上限 ——
+> 命令名和主题、报文格式无关，设备侧拿它查一张分派表；要加自己的命令见 §11.5。
 > 设备侧实现见 `components/brookesia_hub_commands/`。
 
-### 11.1 三条固定命令
+### 11.1 本仓演示的三条
 
 Agent → P4：`hub/command/p4`，QoS 1，**不要 retained**。
 
@@ -399,8 +400,42 @@ mosquitto_pub ... -t hub/command/p4 -m '{"v":1,"id":"t5","cmd":"close_all"}'
 
 ### 11.4 已知边界
 
-- **只有这三条**：没有"打开任意 app / 点任意按钮 / 调音量"。
+- **本仓只实现了这三条**：默认没有"打开任意 app / 点任意按钮 / 调音量"，
+  这些属于使用者的定制范围（做法见 §11.5）。
 - **music 与 aichat 别同时用**：MusicPlayer 进后台**故意不断音频**，
   两路会同时抢同一个音频编解码通路。**分开测**。
 - 运行中的 app 上限是 **3**；开满后再开新的，框架会关掉一个 —— 关的是它内部表顺序里的
   "最后一个"，**不保证最老**。所以别在满 3 个时指望 MusicPlayer 还在放。
+
+### 11.5 加自己的命令
+
+协议与命令名无关：`cmd` 就是一个字符串，设备侧拿它查一张分派表，查不到才回 `unknown_cmd`。
+所以加命令是**加法**，主题、报文格式、`ack`、错误码都不用动。
+
+改一处即可 —— `components/brookesia_hub_commands/brookesia_hub_commands.cpp` 的
+`HubCommands::_execute()`：
+
+```cpp
+if (std::strcmp(pending.cmd, "music") == 0) {
+    app_name = APP_NAME_MUSIC;
+} else if (std::strcmp(pending.cmd, "aichat") == 0) {
+    app_name = APP_NAME_AICHAT;
+} else if (std::strcmp(pending.cmd, "volume") == 0) {   // ← 你自己的
+    _setVolume(pending);                                 //   想做什么就做什么
+    return;
+} else {
+    _ack(pending, false, "unknown_cmd");
+    return;
+}
+```
+
+三条约定：
+
+- **上下文已经是对的**：命令在 `_onPoll()`（一个 `lv_timer`）里出队后执行，
+  所以你写的分支天然跑在 **LVGL 任务**上，可以直接碰 UI。别在里面做几秒级的阻塞操作
+  （解码、写盘），丢给独立任务再从那里回调。
+- **字段长度**：`id` / `cmd` / `arg` 分别是 **40 / 16 / 16** 字节（含结尾 `\0`）。
+  超长会被截断并在日志里告警；`cmd` 实际只有 15 个字符可用。
+- **必须回 `ack`**：每条命令都要走 `_ack(...)` 收尾，否则 Agent 侧只能看到一条永远配不上对的下文。
+
+Agent 侧照常发 `{"v":1,"id":"x","cmd":"volume","arg":"up"}` 即可。
