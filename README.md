@@ -57,7 +57,7 @@ WiFi 开机自动连接、断线自愈；网络配置与 broker 参数都存在�
 
 ### A. 直接刷预编译固件
 
-到 [Releases](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/releases) 下载固件包并解压，然后：
+到本仓的 [Releases](../../releases) 下载固件包并解压，然后：
 
 ```bash
 pip install esptool
