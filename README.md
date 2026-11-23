@@ -45,15 +45,15 @@ WiFi 开机自动连接、断线自愈；网络配置与 broker 参数都存在�
 | 横屏桌面 | Hub | 相册 · 明细图 |
 |:--:|:--:|:--:|
 | [![](docs/images/home-landscape.jpg)](docs/images/home-landscape.jpg) | [![](docs/images/hub.jpg)](docs/images/hub.jpg) | [![](docs/images/album-zoom.jpg)](docs/images/album-zoom.jpg) |
-| 应用网格，1280×800，可翻转 180° | 把指令发给 Agent，流式回执逐帧回来 | 点开按 1:1 解码，这张放大到 200% |
+| 应用网格，1280×800，可翻转 180° | 把指令发给 Agent，流式回执逐帧回来 | 点开按 1:1 解码，这张放大到 166% |
 
 <details>
-<summary>展开其余 6 张：竖屏桌面 · 小智 · 音乐 · 相册网格 · 相册大图 · U 盘模式</summary>
+<summary>展开其余 7 张：竖屏桌面 · 小智 · 音乐 · 视频 · 相册网格 · 相册大图 · U 盘模式</summary>
 
-| 竖屏桌面 | 小智 AI | 音乐 |
-|:--:|:--:|:--:|
-| [![](docs/images/home-portrait.jpg)](docs/images/home-portrait.jpg) | [![](docs/images/xiaozhi.jpg)](docs/images/xiaozhi.jpg) | [![](docs/images/music.jpg)](docs/images/music.jpg) |
-| 同一个桌面，竖屏布局 | 语音对话，走小智官方云 | MP3 播放，可后台 |
+| 竖屏桌面 | 小智 AI | 音乐 | 视频 |
+|:--:|:--:|:--:|:--:|
+| [![](docs/images/home-portrait.jpg)](docs/images/home-portrait.jpg) | [![](docs/images/xiaozhi.jpg)](docs/images/xiaozhi.jpg) | [![](docs/images/music.jpg)](docs/images/music.jpg) | [![](docs/images/video-grid.jpg)](docs/images/video-grid.jpg) |
+| 同一个桌面，竖屏布局 | 语音对话，走小智官方云 | MP3 播放，可后台 | 先挑片：网格预览 |
 
 | 相册 · 缩略图网格 | 相册 · 明细图 100% | U 盘模式 |
 |:--:|:--:|:--:|
