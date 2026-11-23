@@ -38,6 +38,44 @@ WiFi 开机自动连接、断线自愈；网络配置与 broker 参数都存在�
 
 ---
 
+## 实物与演示
+
+### 实机照片
+
+| 横屏桌面 | Hub | 相册 · 明细图 |
+|:--:|:--:|:--:|
+| [![](docs/images/home-landscape.jpg)](docs/images/home-landscape.jpg) | [![](docs/images/hub.jpg)](docs/images/hub.jpg) | [![](docs/images/album-zoom.jpg)](docs/images/album-zoom.jpg) |
+| 应用网格，1280×800，可翻转 180° | 把指令发给 Agent，流式回执逐帧回来 | 点开按 1:1 解码，这张放大到 200% |
+
+<details>
+<summary>展开其余 6 张：竖屏桌面 · 小智 · 音乐 · 相册网格 · 相册大图 · U 盘模式</summary>
+
+| 竖屏桌面 | 小智 AI | 音乐 |
+|:--:|:--:|:--:|
+| [![](docs/images/home-portrait.jpg)](docs/images/home-portrait.jpg) | [![](docs/images/xiaozhi.jpg)](docs/images/xiaozhi.jpg) | [![](docs/images/music.jpg)](docs/images/music.jpg) |
+| 同一个桌面，竖屏布局 | 语音对话，走小智官方云 | MP3 播放，可后台 |
+
+| 相册 · 缩略图网格 | 相册 · 明细图 100% | U 盘模式 |
+|:--:|:--:|:--:|
+| [![](docs/images/album-grid.jpg)](docs/images/album-grid.jpg) | [![](docs/images/album-photo.jpg)](docs/images/album-photo.jpg) | [![](docs/images/usb-drive.jpg)](docs/images/usb-drive.jpg) |
+| 占位格先顶上，补图在后台一张张来 | 缩放条 100%–200% | 把 SD 卡交给电脑（MSC） |
+
+</details>
+
+> 屏显壁纸与视频封面是演示素材。
+
+### 演示视频
+
+[![](docs/images/video-ai-relay.jpg)](https://www.bilibili.com/video/BV1TyyjzWEXU)
+
+**[万物皆可调度！手搓一套架构，让 P4 平板指挥电脑和小车](https://www.bilibili.com/video/BV1TyyjzWEXU)** · 3 分 49 秒
+
+视频里演示了两条链路：① 对着平板说话，小智 AI 充当中转，把话交给跑在电脑上的 Agent（DSH）；
+② Agent 反过来通过 MQTT 调度物理世界 —— 拉起平板上的应用，让树莓派小车原地转一圈。
+语音只做闲聊和轻量调度；高风险的物理动作要走控制面的审批卡片。
+
+---
+
 ## 硬件
 
 | 项 | 要求 |

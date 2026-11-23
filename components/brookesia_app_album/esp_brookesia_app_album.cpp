@@ -578,17 +578,17 @@ static bool _jpegInfoFile(const char *path, int &w, int &h, uint8_t *sof = nullp
 }
 
 /*
- * 手机原图的**头部可能挂着很大的 APPn 段**：安卓新机拍照会写 C2PA 内容凭证
- *    （APP11 / JUMBF）。实测一张 1536×2752 的照片带了 **14,266 B**，
- *    而 `esp_new_jpeg` 的 `jpeg_dec_parse_header` **吃不下这种头** —— 直接返回失败。
+ * **防御性保留** —— 不是某个故障的根因（根因见下面 JPEG_MAX_DOWNSCALE 那段）。
  *
- *    表现最迷惑的地方：头里该有的东西全都正常（SOI / APP0 / DQT / SOF0 / DHT×4 / SOS，
- *    基线式、8 bit、3 分量、段顺序与能正常显示的图**逐项一致**），
- *    同样的字节拿到 PC 上解毫无问题 —— 只有这个解码器不认。
- *    判据：**能正常显示的图，APPn 加起来最多 1.3 KB；失败的那批是 14 KB。**
+ * 手机原图的头部可能挂着很大的 APPn 段：安卓新机拍照会写 C2PA 内容凭证
+ *    （APP11 / JUMBF）。实测一张 1536×2752 的照片带了 **14,266 B**，
+ *    再往下还有 50 KB 的 EXIF 与 10 KB 的厂商私有段（APP3）。
+ *    这些字节解码器一个都用不上，却要在每次解码前整段读进内存。
  *
  *    ⇒ 喂给解码器之前把 APPn（E0~EF）和 COM（FE）段**就地剥掉**：
- *      原缓冲里压缩，不额外占内存，剥完仍是合法的 JPEG（PC 端已逐张验证）。
+ *      原缓冲里压缩，不额外占内存，剥完仍是合法的 JPEG。
+ *    留着它的理由只有两条：省掉一次读盘/内存开销；解码器对少见的头部组合
+ *    未必总这么宽容，剥掉是最便宜的一道保险。
  *    只在"APPn 合计超过 JPEG_APP_BUDGET"时才剥 —— 正常图片保持原样，
  *    免得去动 Adobe APP14 这类会影响颜色解释的段。
  */
@@ -1705,8 +1705,8 @@ bool Album::_decodeAt(const Photo &p, int target_edge, uint8_t *buf, size_t buf_
     }
 
     /*
-     * 手机原图的头部可能挂着十几 KB 的 APPn（安卓新机的 C2PA 内容凭证），
-     * esp_new_jpeg 的头解析吃不下 —— 见 JPEG_APP_BUDGET 上面那段。
+     * 手机原图的头部可能挂着几十 KB 的 APPn（C2PA 内容凭证 / EXIF / 厂商私有段）。
+     * 这是防御性处理 —— 见 JPEG_APP_BUDGET 上面那段（根因与头部长度无关）。
      * 就地剥掉即可，**不额外占内存**，熵编码数据一个字节都不碰。
      */
     if (!p.is_webp) {
@@ -4065,7 +4065,7 @@ void Album::_runWallpaperJob(const AlbumWallpaperJob &job)
         data = file_data;
         len = file_len;
         if (file_data != nullptr && !job.is_webp) {
-            /* 和网格/大图页走同一道预处理：手机原图的 APPn 可能胖到解码器吃不下 */
+            /* 和网格/大图页走同一道预处理（防御性剥 APPn，见 JPEG_APP_BUDGET 上面那段） */
             file_len = _jpegPrepareForDecode(file_data, file_len, job.path);
             len = file_len;
         }
